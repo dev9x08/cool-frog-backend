@@ -10,6 +10,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use DateTime;
 
+use Web3\Web3;
+use Web3\Providers\HttpProvider;
+use Web3\RequestManagers\HttpRequestManager;
+use Web3\Contract;
+use Web3\Utils;
+use Web3\Personal;
+
 class ClickerController extends Controller
 {
     public function sync(Request $request)
@@ -367,6 +374,8 @@ class ClickerController extends Controller
             ]);
         }
 
+        
+
         return response()->json([
             'success' => false,
             'message' => 'Unable to claim daily task reward. Task may not be available or already completed for today.',
@@ -376,11 +385,11 @@ class ClickerController extends Controller
     public function setTonWallet(Request $request)
     {
         $request->validate([
-            'ton_wallet' => 'required|string',
+            'wallet' => 'required|string',
         ]);
 
         $user = $request->user();
-        $user->ton_wallet = $request->input('ton_wallet');
+        $user->ton_wallet = $request->input('wallet');
         $user->save();
 
         return response()->json([
@@ -389,4 +398,95 @@ class ClickerController extends Controller
             'ton_wallet' => $user->ton_wallet,
         ]);
     }
+
+
+    public function transferTokens(Request $request)
+    {
+        $claimOpenStatus = env('CLAIM_OPEN_STATUS');
+        if($claimOpenStatus == "false") {
+            return response()->json([
+                'success' => false,
+                'locked' => true,
+                'message' => 'Claim is not open'
+            ], 200);
+        }
+        try {
+            $request->validate([
+                'to_address' => 'required|string',
+                'amount' => 'required|numeric'
+            ]);
+
+            $user = $request->user();
+
+            $adminPrivateKey = env('ADMIN_WALLET_PRIVATE_KEY');
+            $adminWalletAddress = env('ADMIN_WALLET_ADDRESS');
+            $tokenContractAddress = env('TOKEN_CONTRACT_ADDRESS');
+            $tokenPer1000Point = env('TOKEN_PER_1000_POINT');
+            $contractABI = json_decode(file_get_contents(base_path('app/contracts/abi.json')), true);
+            $decimals = 18;
+            $web3 = new Web3(new HttpProvider(new HttpRequestManager(env('BLOCKCHAIN_RPC_URL'), 300)));
+            $contract = new Contract($web3->provider, $contractABI);
+            $amount = bcmul(($request->amount)* $tokenPer1000Point / 1000, bcpow('10', $decimals));
+            $data = $contract->at($tokenContractAddress)->getData(
+                'transfer', 
+                $request->to_address,
+                $amount
+            );
+            $data = '0x' . preg_replace('/^0x/', '', $data);
+            $nonce = null;
+            $web3->eth->getTransactionCount($adminWalletAddress, 'latest', function($err, $result) use (&$nonce) {
+                if ($err) throw new \Exception('Error getting nonce: ' . $err->getMessage());
+                $nonce = $result;
+            });
+            $gasPrice = '5000000000';
+            $rawTx = [
+                'nonce' => '0x' . gmp_strval(gmp_init($nonce), 16),
+                'gasPrice' => '0x' . gmp_strval(gmp_init($gasPrice), 16),
+                'gasLimit' => '0x989680',
+                'to' => $tokenContractAddress,
+                'value' => '0x0',
+                'data' => $data,
+                'chainId' => 97
+            ];
+
+            // \Log::info('Transaction Parameters', [
+            //     'from' => $adminWalletAddress,
+            //     'to' => $request->to_address,
+            //     'amount' => $request->amount,
+            //     'amount_wei' => $amount,
+            //     'nonce' => $nonce,
+            //     'gas_price_gwei' => '5',
+            //     'data' => $data
+            // ]);
+
+            $transaction = new \Web3p\EthereumTx\Transaction($rawTx);
+            $signedTx = '0x' . $transaction->sign($adminPrivateKey);
+            $txHash = null;
+            $web3->eth->sendRawTransaction($signedTx, function($err, $result) use (&$txHash) {
+                if ($err) throw new \Exception('Failed to send transaction: ' . $err->getMessage());
+                $txHash = $result;
+            });
+
+            $user->balance = 0;
+            $user->save();
+
+            return response()->json([
+                'success' => true,
+                'tx_hash' => $txHash,
+                'amount' => $amount
+            ]);
+
+        } catch (\Exception $e) {
+            // \Log::error('Token Transfer Error', [
+            //     'error' => $e->getMessage(),
+            //     'trace' => $e->getTraceAsString()
+            // ]);
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+
 }

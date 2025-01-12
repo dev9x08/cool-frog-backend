@@ -66,7 +66,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/use-daily-booster', [ClickerController::class, 'useDailyBooster']);
 
         // Set ton wallet
-        Route::post('/set-ton-wallet', [ClickerController::class, 'setTonWallet']);
+        Route::post('/set-wallet', [ClickerController::class, 'setTonWallet']);
+        Route::post('/claim-tokens', [ClickerController::class, 'transferTokens']);
 
         // Missions
         Route::get('missions', [UserMissionController::class, 'index']);
