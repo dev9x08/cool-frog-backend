@@ -403,7 +403,8 @@ class ClickerController extends Controller
     public function transferTokens(Request $request)
     {
         $claimOpenStatus = env('CLAIM_OPEN_STATUS');
-        if($claimOpenStatus == "false") {
+
+        if(!$claimOpenStatus) {
             return response()->json([
                 'success' => false,
                 'locked' => true,
